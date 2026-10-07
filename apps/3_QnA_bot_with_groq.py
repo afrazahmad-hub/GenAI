@@ -63,13 +63,13 @@ if query:
     # create a container in browser to store the response
     ai_container = st.chat_message("ai")
     with ai_container:
-        space = st.empty()
-        message = ""
+        space = st.empty() # create an empty space for message write
+        message = "" # Will start from blank space, then appended word/token by word/token.
 
         for chunk in response:
             message = message + chunk[0].content
             space.write(message)
-            st.session_state.history.append({"role": "ai", "content": message})
+        st.session_state.history.append({"role": "ai", "content": message})
 
 
     # answer = response["messages"][-1].content
