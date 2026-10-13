@@ -7,3 +7,10 @@ langchain-community
 dotenv
 langchain-google-genai
 streamlit
+# RAG
+pypdf
+beautifulsoup4 # website hhtp data crawler
+wikipedia
+langchain-text-splitters
+
+langchain-chroma # database
