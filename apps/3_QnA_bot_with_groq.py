@@ -38,7 +38,7 @@ agent = create_agent(
     system_prompt="You are an AI agent, will search on google to response."
 )
 
-st.subheader("Afraz's Chat Bot - Quick Answers 🚀")
+st.subheader("Afraz's Chat Bot: Groq Powered - Quick Answers 🚀")
 
 # to display in browser
 for message in st.session_state.history:

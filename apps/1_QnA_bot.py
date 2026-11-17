@@ -6,6 +6,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 import streamlit as st
 
 llm = ChatGoogleGenerativeAI(model="gemini-3.1-flash-lite")
+# llm = ChatGoogleGenerativeAI(model="gemini-4-argon")
 
 # -----------------------------------------------------------------------
 # SIMPLE EXECUATION
@@ -29,7 +30,7 @@ llm = ChatGoogleGenerativeAI(model="gemini-3.1-flash-lite")
 # STREAMLIT
 # Main page title and descriptions
 st.title("Afraz's AI Q&N Bot...🤖")
-st.markdown("A Google Gemini Powred Question/Answer Chat Bot.")
+st.markdown("A Simple Question/Answer Chat Bot.")
 
 # To Preserve the browser memory---use session_state
 if "messages" not in st.session_state:

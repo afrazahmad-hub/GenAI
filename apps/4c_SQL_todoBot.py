@@ -5,25 +5,31 @@
 from dotenv import load_dotenv
 load_dotenv()
 
-# llm, tools, memory, agent,
+import sqlite3
+from typing import Literal
+from uuid import uuid4
 
-# llm
-# from langchain_groq import ChatGroq
 from langchain_anthropic import ChatAnthropic
-# tools
-from langchain_community.utilities import SQLDatabase # used to connect with db
-from langchain_community.agent_toolkits import SQLDatabaseToolkit
-# memory
+from langchain.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
-# agent
 from langchain.agents import create_agent
-# streamlit UI
 import streamlit as st
 
 
-# creating the database and table, we are using sqllite.
-db = SQLDatabase.from_uri("sqlite:///my_tasks.db")
-db.run("""
+def run_db(statement, parameters=(), *, fetch=False):
+    connection = sqlite3.connect("my_tasks.db", timeout=10)
+    connection.row_factory = sqlite3.Row
+    try:
+        with connection:
+            cursor = connection.execute(statement, parameters)
+            if fetch:
+                return [dict(row) for row in cursor.fetchall()]
+            return cursor.rowcount
+    finally:
+        connection.close()
+
+
+run_db("""
 CREATE TABLE IF NOT EXISTS my_tasks(
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     title TEXT NOT NULL,
@@ -34,42 +40,101 @@ CREATE TABLE IF NOT EXISTS my_tasks(
 """)
 
 # model = ChatGroq(model="openai/gpt-oss-20b")
-model = ChatAnthropic(model="claude-opus-5")
-toolkit = SQLDatabaseToolkit(db=db, llm=model)
-tools = toolkit.get_tools()
+model = ChatAnthropic(
+    model="claude-opus-5",
+    disable_streaming="tool_calling",
+)
 system_prompt = """
-You are a task management assistant that interacts with a SQL database containing a 'my_tasks' table. 
+You are a task management assistant. Use only the provided task tools; do not write SQL.
 
 TASK RULES:
-1. Limit SELECT queries to 10 results max with ORDER BY created_at DESC
-2. After CREATE/UPDATE/DELETE, confirm with SELECT query
-3. If the user requests a list of tasks, present the output in a structured table format to ensure a clean and organized display in the browser."
+1. Add each requested task once; do not retry a successful tool call.
+2. Use list_tasks to show up to 10 newest tasks.
+3. When listing tasks, present them in a structured table.
 
-CRUD OPERATIONS:
-    CREATE: INSERT INTO my_tasks(title, descriptions, status)
-    READ: SELECT * FROM my_tasks WHERE ... LIMIT 10
-    UPDATE: UPDATE my_tasks SET status=? WHERE id=? OR title=?
-    DELETE: DELETE FROM my_tasks WHERE id=? OR title=?
+Use only add_task, list_tasks, update_task, and delete_task for CRUD operations.
+Use add_task once per requested task; never retry a successful write.
+Use list_tasks to read tasks; it returns up to 10 newest items.
+For updates, identify the task by ID and use update_task.
+For deletions, identify the task by ID and use delete_task.
+Only use the exact statuses pending, in_progress, and complete.
 
-Table schema: id, title, descriptions, status(pending/in_progress/completed), created_at.
+Stored task fields: id, title, descriptions, status, and created_at.
 """
 
-# We have function b/c each time streamlit run it refreash the all code
-# As a result the memory of the session lost, thats why we created a function and put a decorator.
+def build_tools():
+    added_titles = set()
 
-@st.cache_resource
-def get_agent():
-    agent = create_agent(
-        model=model,
-        tools=tools,
-        checkpointer=InMemorySaver(),
-        system_prompt=system_prompt
-    )
-    return agent
+    @tool
+    def add_task(title: str, description: str = "") -> str:
+        """Add one task with a title and optional description."""
+        normalized_title = title.strip().casefold()
+        if normalized_title in added_titles:
+            return f"A task titled '{title}' was already added for this request; no duplicate was created."
 
-agent = get_agent()
+        run_db(
+            "INSERT INTO my_tasks (title, descriptions) VALUES (:title, :description)",
+            parameters={"title": title.strip(), "description": description.strip()},
+        )
+        added_titles.add(normalized_title)
+        return f"Task added: {title.strip()}"
 
-st.subheader("AI Powered Task Manger by Afraz.")
+    @tool
+    def list_tasks() -> str:
+        """List up to 10 most recently created tasks."""
+        rows = run_db(
+            "SELECT id, title, descriptions, status, created_at "
+            "FROM my_tasks ORDER BY created_at DESC, id DESC LIMIT 10",
+            fetch=True,
+        )
+        if not rows:
+            return "No tasks found."
+        return "\n".join(
+            f"ID: {row['id']} | {row['title']} | {row['status']} | "
+            f"{row['descriptions'] or ''} | {row['created_at']}"
+            for row in rows
+        )
+
+    @tool
+    def update_task(task_id: int, status: Literal["pending", "in_progress", "complete"]) -> str:
+        """Update a task's status using its ID."""
+        run_db(
+            "UPDATE my_tasks SET status = :status WHERE id = :task_id",
+            parameters={"status": status, "task_id": task_id},
+        )
+        rows = run_db(
+            "SELECT id, title, status FROM my_tasks WHERE id = :task_id",
+            parameters={"task_id": task_id},
+            fetch=True,
+        )
+        if not rows:
+            return f"No task found with ID {task_id}."
+        row = rows[0]
+        return f"Updated task {row['id']} ({row['title']}) to {row['status']}."
+
+    @tool
+    def delete_task(task_id: int) -> str:
+        """Delete a task using its ID."""
+        rows = run_db(
+            "SELECT id, title FROM my_tasks WHERE id = :task_id",
+            parameters={"task_id": task_id},
+            fetch=True,
+        )
+        if not rows:
+            return f"No task found with ID {task_id}."
+        run_db(
+            "DELETE FROM my_tasks WHERE id = :task_id",
+            parameters={"task_id": task_id},
+        )
+        return f"Deleted task {task_id} ({rows[0]['title']})."
+
+    return [add_task, list_tasks, update_task, delete_task]
+
+st.subheader("AI Powered Task Manger, by Afraz 🤖")
+
+if "memory" not in st.session_state:
+    st.session_state.memory = InMemorySaver()
+    st.session_state.thread_id = str(uuid4())
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -86,13 +151,27 @@ if prompt:
     st.chat_message("user").markdown(prompt)
     st.session_state.messages.append({"role":"user", "content": prompt})
 
-    # AI message part in browser
+    agent = create_agent(
+        model=model,
+        tools=build_tools(),
+        checkpointer=st.session_state.memory,
+        system_prompt=system_prompt,
+    )
+
     with st.chat_message("ai"):
-        with st.spinner("processing..."):
-            res = agent.invoke(
+        with st.spinner("Working on your request..."):
+            result = agent.invoke(
                 {"messages":[{"role": "user", "content":prompt}]},
-                {"configurable": {"thread_id":"1"}}
+                {"configurable": {"thread_id": st.session_state.thread_id}},
             )
-            answer = res["messages"][-1].content
-            st.markdown(answer)
-            st.session_state.messages.append({"role":"ai", "content": answer})
+        answer = result["messages"][-1].content
+        if isinstance(answer, list):
+            answer = "".join(
+                block["text"]
+                for block in answer
+                if isinstance(block, dict)
+                and block.get("type") == "text"
+                and isinstance(block.get("text"), str)
+            )
+        st.markdown(answer)
+        st.session_state.messages.append({"role":"ai", "content": answer})
