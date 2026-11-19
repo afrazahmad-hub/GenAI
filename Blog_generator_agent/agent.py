@@ -7,7 +7,7 @@ env_path = find_dotenv()
 load_dotenv(env_path)
 
 # llm model
-def get_llm(model_name : str = "claude-opus-5", temperature : float = 0.5):
+def get_llm(model_name : str = "claude-fable-5-2", temperature : float = 0.5):
     llm = ChatAnthropic(
         model_name=model_name,
         temperature=temperature,
